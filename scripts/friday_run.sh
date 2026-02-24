@@ -29,6 +29,6 @@ if [ -z "$BRAVE_API_KEY" ]; then
 fi
 
 # Lancement mise à jour + email
-python -m morez_events run --friday
+python3 -m morez_events run --friday
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Terminé avec succès ✓"
