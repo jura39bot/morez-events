@@ -104,18 +104,37 @@ Logs disponibles dans `data/cron.log`.
 
 ## Villes couvertes (≤1h de Morez)
 
-| Ville | Département |
-|-------|-------------|
-| Morez | Jura (39) |
-| Saint-Claude | Jura (39) |
-| Lons-le-Saunier | Jura (39) |
-| Champagnole | Jura (39) |
-| Pontarlier | Doubs (25) |
-| Oyonnax | Ain (01) |
-| Bourg-en-Bresse | Ain (01) |
-| Dole | Jura (39) |
-| Poligny | Jura (39) |
-| Clairvaux-les-Lacs | Jura (39) |
+**70 communes** dans 3 départements, toutes vérifiées à ≤1h de route depuis Morez.
+
+### Jura (39) — 39 villes
+| Ville | ~Durée |
+|-------|--------|
+| Prémanon, Morbier, Lajoux | 10–15 min |
+| Bois-d'Amont, Longchaumois, Bellefontaine, Chaux-des-Prés, Viry, Fort-du-Plasne | 20 min |
+| Saint-Claude, Mournans-Charbonny, Foncine-le-Haut, Saint-Lupicin, La Pesse, Les Planches-en-Montagne, Thoiria | 25 min |
+| Champagnole, Moirans-en-Montagne, Clairvaux-les-Lacs, Saint-Laurent-en-Grandvaux, Salins-les-Bains | 35 min |
+| Arbois, Poligny, Orgelet, Arinthod, Beaufort, Montain, Marigny | 40 min |
+| Mouchard, Lons-le-Saunier | 45 min |
+| Dole, Plainoiseau, Commenailles, Toulouse-le-Château, Mont-sous-Vaudrey, Cramans | 50 min |
+| Saint-Amour | 55 min |
+
+### Doubs (25) — 15 villes
+| Ville | ~Durée |
+|-------|--------|
+| Métabief, Les Hôpitaux-Neufs, Chaux-Neuve, Rochejean, Malbuisson | 25 min |
+| Labergement-Sainte-Marie | 30 min |
+| Pontarlier, Montbenoît, Frasne, Les Fourgs | 35 min |
+| Gilley | 40 min |
+| Morteau, Grand-Combe-Châteleu | 45 min |
+| Ornans, Valdahon | 50 min |
+
+### Ain (01) — 10 villes
+| Ville | ~Durée |
+|-------|--------|
+| Oyonnax, Nantua | 35 min |
+| Bellegarde-sur-Valserine | 45 min |
+| Aranc, Izieu | 50 min |
+| Jujurieux, Culoz, Bourg-en-Bresse, Ferney-Voltaire, Sauverny | 55 min |
 
 ---
 
