@@ -165,7 +165,7 @@ HEADERS = {
 }
 
 # Catégories à scraper par ville
-ALENTOOR_CATS = ["concert", "festival", "spectacle", "theatre", "exposition", "sport", "festivites"]
+ALENTOOR_CATS = ["concert", "festival", "spectacle", "theatre", "exposition", "sport", "festivites", "activites-loisirs"]
 
 
 def _parse_jsonld_event(data: dict, source_dept: str) -> Optional[Event]:
@@ -309,14 +309,14 @@ def scrape_alentoor() -> List[Event]:
 
 def collect_events(week_start: date, week_end: date) -> List[Event]:
     """
-    Collecte tous les événements depuis les deux sources,
+    Collecte tous les événements depuis toutes les sources,
     filtre sur la semaine et déduplique.
     """
     logger.info(f"Collecte événements du {week_start} au {week_end}")
 
     all_events: List[Event] = []
 
-    # Source 1 : Brave Search (si clé disponible)
+    # Source 1 : Brave Search général (si clé disponible)
     try:
         brave_events = search_brave(week_start, week_end)
         logger.info(f"Brave: {len(brave_events)} événements bruts")
@@ -324,7 +324,7 @@ def collect_events(week_start: date, week_end: date) -> List[Event]:
     except Exception as e:
         logger.error(f"Erreur source Brave: {e}")
 
-    # Source 2 : alentoor.fr (JSON-LD, pas de clé requise)
+    # Source 2 : alentoor.fr par ville (JSON-LD)
     try:
         alentoor_events = scrape_alentoor()
         logger.info(f"alentoor.fr: {len(alentoor_events)} événements bruts")
@@ -332,11 +332,20 @@ def collect_events(week_start: date, week_end: date) -> List[Event]:
     except Exception as e:
         logger.error(f"Erreur source alentoor.fr: {e}")
 
+    # Source 3 : Activités seniors (Brave ciblé + CCAS/mairies)
+    try:
+        from .senior_scraper import collect_senior_events
+        senior_events = collect_senior_events(week_start, week_end)
+        logger.info(f"Senior: {len(senior_events)} activités")
+        all_events.extend(senior_events)
+    except Exception as e:
+        logger.error(f"Erreur source senior: {e}")
+
     # Filtrage sur la semaine
-    filtered = []
-    for ev in all_events:
-        if ev.date is None or (week_start <= ev.date <= week_end):
-            filtered.append(ev)
+    filtered = [
+        ev for ev in all_events
+        if ev.date is None or (week_start <= ev.date <= week_end)
+    ]
 
     # Dédoublonnage
     unique = deduplicate(filtered)

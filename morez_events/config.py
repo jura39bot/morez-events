@@ -26,6 +26,7 @@ ALENTOOR_CITY_SLUGS = {
     "Morez":                        "morez",                     # centre, 0 min
     "Prémanon":                     "premanon",                  # 10 min
     "Morbier":                      "morbier",                   # 15 min
+    "Les Rousses":                  "les-rousses",               # 15 min
     "Lajoux":                       "lajoux",                    # 15 min
     "Bois-d'Amont":                 "bois-d-amont",              # 20 min
     "Longchaumois":                 "longchaumois",              # 20 min
@@ -109,12 +110,23 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 CATEGORIES = {
     "concert": "🎵 Concerts & Musique",
     "culture": "🎭 Culture & Spectacles",
-    "sport": "⚽ Sports",
-    "autre": "🎪 Autres événements",
+    "sport":   "⚽ Sports",
+    "senior":  "🧓 Activités Seniors",
+    "autre":   "🎪 Autres événements",
 }
 
 # Mots-clés pour détecter la catégorie depuis le titre/description
 CATEGORY_KEYWORDS = {
+    "senior": [
+        "senior", "seniors", "retraité", "retraités", "âge d'or", "age d'or",
+        "troisième âge", "troisième age", "gym douce", "gym douce",
+        "qi-gong", "qi gong", "qigong", "yoga senior", "tai chi", "taï chi",
+        "atelier mémoire", "atelier memoire", "sophrologie", "relaxation",
+        "marche nordique senior", "gym senior", "fitness senior",
+        "club senior", "club aîné", "animations seniors", "animation senior",
+        "sortie senior", "sortie retraite", "loisirs seniors",
+        "ccas", "clic", "aide à domicile", "portage repas", "aidants",
+    ],
     "concert": [
         "concert", "musique", "live", "festival", "rock", "jazz", "blues",
         "classique", "opéra", "chanson", "rap", "electro", "métal", "folk",
@@ -130,3 +142,9 @@ CATEGORY_KEYWORDS = {
         "musée", "vernissage", "comédie", "pièce", "marionnette",
     ],
 }
+
+# ── Villes ciblées pour la recherche senior (Brave Search spécifique) ────────
+SENIOR_CITIES = [
+    "Morez", "Morbier", "Les Rousses", "Prémanon",
+    "Bois-d'Amont", "Saint-Claude", "Champagnole",
+]

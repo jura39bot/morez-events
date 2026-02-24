@@ -109,7 +109,7 @@ Logs disponibles dans `data/cron.log`.
 ### Jura (39) — 39 villes
 | Ville | ~Durée |
 |-------|--------|
-| Prémanon, Morbier, Lajoux | 10–15 min |
+| Prémanon, Morbier, Les Rousses, Lajoux | 10–15 min |
 | Bois-d'Amont, Longchaumois, Bellefontaine, Chaux-des-Prés, Viry, Fort-du-Plasne | 20 min |
 | Saint-Claude, Mournans-Charbonny, Foncine-le-Haut, Saint-Lupicin, La Pesse, Les Planches-en-Montagne, Thoiria | 25 min |
 | Champagnole, Moirans-en-Montagne, Clairvaux-les-Lacs, Saint-Laurent-en-Grandvaux, Salins-les-Bains | 35 min |
@@ -138,12 +138,27 @@ Logs disponibles dans `data/cron.log`.
 
 ---
 
+## Catégories
+
+| Catégorie | Emoji | Description |
+|-----------|-------|-------------|
+| Concerts & Musique | 🎵 | Concerts, festivals, live |
+| Culture & Spectacles | 🎭 | Théâtre, expo, cinéma, danse |
+| Sports | ⚽ | Matchs, tournois, compétitions |
+| **Activités Seniors** | 🧓 | Gym douce, qi-gong, ateliers mémoire, clubs seniors, CCAS |
+| Autres | 🎪 | Foires, marchés, divers |
+
+Villes couvertes pour les **activités seniors** (recherche approfondie) :
+Morez, Morbier, Les Rousses, Prémanon, Bois-d'Amont, Saint-Claude, Champagnole
+
 ## Sources de données
 
-| Source | Type |
-|--------|------|
-| [Brave Search API](https://api.search.brave.com/) | Recherche web (concerts, spectacles, sport) |
-| [sortir.eu](https://www.sortir.eu/) | Scraping agenda local |
+| Source | Type | Catégories |
+|--------|------|------------|
+| [alentoor.fr](https://www.alentoor.fr/) | Scraping JSON-LD par ville | Toutes |
+| [Brave Search API](https://api.search.brave.com/) | Recherche web | Toutes |
+| Brave Search ciblé senior | Requêtes spécifiques CCAS/seniors | 🧓 Seniors uniquement |
+| Sites mairies/CCAS | Scraping HTML local | 🧓 Seniors uniquement |
 
 ---
 

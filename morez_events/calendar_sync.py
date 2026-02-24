@@ -177,7 +177,10 @@ def push_events_to_calendar(
             description = "\n".join(p for p in description_parts if p)
 
             # Titre : emoji catégorie + titre + ville
-            cat_emoji = {"concert": "🎵", "culture": "🎭", "sport": "⚽", "autre": "🎪"}.get(ev.category, "📅")
+            cat_emoji = {
+                "concert": "🎵", "culture": "🎭",
+                "sport": "⚽", "senior": "🧓", "autre": "🎪"
+            }.get(ev.category, "📅")
             summary = f"{cat_emoji} {ev.title} — {ev.city}"[:100]
 
             cmd = [
