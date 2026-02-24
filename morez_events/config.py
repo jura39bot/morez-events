@@ -21,15 +21,25 @@ CITIES = [
     "Clairvaux-les-Lacs",
 ]
 
-# Slugs sortir.eu pour les villes disponibles sur le site
-SORTIRIEU_SLUGS = {
-    "Lons-le-Saunier": "lons-le-saunier",
-    "Saint-Claude": "saint-claude",
-    "Pontarlier": "pontarlier",
-    "Oyonnax": "oyonnax",
-    "Champagnole": "champagnole",
-    "Bourg-en-Bresse": "bourg-en-bresse",
-    "Dole": "dole",
+# Slugs alentoor.fr pour chaque ville cible (URL: /slug/agenda/cat)
+ALENTOOR_CITY_SLUGS = {
+    # Jura (39)
+    "Morez":                   "morez",
+    "Saint-Claude":            "saint-claude-39",
+    "Lons-le-Saunier":         "lons-le-saunier",
+    "Champagnole":             "champagnole",
+    "Poligny":                 "poligny",
+    "Dole":                    "dole",
+    "Clairvaux-les-Lacs":      "clairvaux-les-lacs",
+    "Arbois":                  "arbois",          # inclus car proche et intéressant
+    "Saint-Laurent-en-Grandvaux": "saint-laurent-en-grandvaux",
+    "Orgelet":                 "orgelet",
+    "Moirans-en-Montagne":     "moirans-en-montagne",
+    # Doubs (25) — uniquement villes ≤1h
+    "Pontarlier":              "pontarlier",
+    # Ain (01) — uniquement villes ≤1h
+    "Oyonnax":                 "oyonnax",
+    "Bourg-en-Bresse":         "bourg-en-bresse",
 }
 
 # ── Chemins ─────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-"""Scraping des événements depuis Brave Search et sortir.eu."""
+"""Scraping des événements depuis Brave Search et alentoor.fr (JSON-LD)."""
 
 import json
 import logging
@@ -24,11 +24,11 @@ class Event:
     title: str
     venue: str
     city: str
-    date_str: str          # Chaîne date originale (pour affichage)
-    date: Optional[date]   # Date parsée (pour filtrage)
-    category: str          # concert | culture | sport | autre
+    date_str: str           # Chaîne date originale (pour affichage)
+    date: Optional[date]    # Date parsée (pour filtrage)
+    category: str           # concert | culture | sport | autre
     url: str
-    source: str            # brave | sortirieu
+    source: str             # brave | alentoor
     description: str = ""
 
     def to_dict(self) -> dict:
@@ -103,7 +103,6 @@ def _parse_brave_result(result: dict, city: str) -> Optional[Event]:
     if not title or not url:
         return None
 
-    # Essayer d'extraire une date depuis la description
     parsed_date = None
     date_str = ""
     for fragment in [description, title]:
@@ -115,11 +114,10 @@ def _parse_brave_result(result: dict, city: str) -> Optional[Event]:
             pass
 
     category = detect_category(title + " " + description)
-    venue = city  # Brave ne donne pas de salle précise en général
 
     return Event(
         title=title,
-        venue=venue,
+        venue=city,
         city=city,
         date_str=date_str,
         date=parsed_date,
@@ -136,7 +134,7 @@ def search_brave(week_start: date, week_end: date) -> List[Event]:
     month_year = week_start.strftime("%B %Y")
 
     queries_templates = [
-        "concert {ville} {mois_annee} site:sortir.eu OR site:fnacspectacles.com OR site:billetweb.fr",
+        "concert {ville} {mois_annee} site:billetweb.fr OR site:fnacspectacles.com OR site:ticketmaster.fr",
         "spectacle théâtre {ville} {mois_annee}",
         "événement sportif match {ville} {mois_annee}",
         "festival exposition {ville} {mois_annee}",
@@ -151,14 +149,14 @@ def search_brave(week_start: date, week_end: date) -> List[Event]:
                 ev = _parse_brave_result(r, city)
                 if ev:
                     events.append(ev)
-            time.sleep(0.3)  # Politesse envers l'API
+            time.sleep(0.3)
 
     return events
 
 
-# ── Source 2 : Scraping sortir.eu ────────────────────────────────────────────
+# ── Source 2 : alentoor.fr (JSON-LD) ─────────────────────────────────────────
 
-SORTIRIEU_BASE = "https://www.sortir.eu"
+ALENTOOR_BASE = "https://www.alentoor.fr"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -166,108 +164,143 @@ HEADERS = {
     )
 }
 
-def _parse_sortirieu_page(html: str, city: str, base_url: str) -> List[Event]:
-    """Parse une page sortir.eu et extrait les événements."""
-    events = []
-    soup = BeautifulSoup(html, "lxml")
+# Catégories à scraper par ville
+ALENTOOR_CATS = ["concert", "festival", "spectacle", "theatre", "exposition", "sport", "festivites"]
 
-    # sortir.eu utilise des cards avec classe "event-item" ou similaire
-    # On cherche les blocs d'événements de manière générique
-    selectors = [
-        "article.event",
-        ".event-item",
-        ".agenda-item",
-        "li.event",
-        ".card-event",
-        "article[class*='event']",
-        "div[class*='event-card']",
-    ]
 
-    items = []
-    for sel in selectors:
-        items = soup.select(sel)
-        if items:
-            logger.info(f"sortir.eu {city}: {len(items)} items avec sélecteur '{sel}'")
-            break
+def _parse_jsonld_event(data: dict, source_dept: str) -> Optional[Event]:
+    """Convertit un bloc JSON-LD Event en Event."""
+    if data.get("@type") != "Event":
+        return None
 
-    if not items:
-        # Fallback : chercher tous les liens qui ressemblent à des événements
-        items = soup.find_all("a", href=re.compile(r"/agenda/|/event/|/spectacle/"))
-        logger.info(f"sortir.eu {city}: {len(items)} liens fallback")
+    title = data.get("name", "").strip()
+    url = data.get("url", "") or data.get("@id", "")
+    if not title:
+        return None
 
-    for item in items[:20]:  # Limiter à 20 par page
+    # Date de début
+    start_date_raw = data.get("startDate", "")
+    parsed_date = None
+    date_str = start_date_raw
+    if start_date_raw:
         try:
-            # Titre
-            title_el = (
-                item.find(["h2", "h3", "h4"])
-                or item.find(class_=re.compile(r"title|name"))
-                or (item if item.name == "a" else None)
-            )
-            title = title_el.get_text(strip=True) if title_el else ""
-            if not title or len(title) < 4:
+            # Format peut être "2026-02-25" ou "2026-02-25T20:00:00"
+            parsed_date = dateparser.parse(start_date_raw, dayfirst=True).date()
+        except Exception:
+            pass
+
+    # Lieu
+    location = data.get("location", {})
+    if isinstance(location, dict):
+        venue = location.get("name", "") or location.get("address", "")
+        if isinstance(venue, dict):
+            venue = venue.get("streetAddress", "")
+        # Extraire la ville depuis l'URL (format: /ville/agenda/...)
+        city = _extract_city_from_url(url)
+    elif isinstance(location, str):
+        venue = location
+        city = _extract_city_from_url(url)
+    else:
+        venue = ""
+        city = _extract_city_from_url(url)
+
+    # Ville de fallback depuis le département
+    if not city:
+        city = source_dept.split("-", 1)[-1].title()
+
+    description = data.get("description", "")[:200]
+    category = detect_category(title + " " + description)
+
+    return Event(
+        title=title,
+        venue=str(venue)[:60] if venue else city,
+        city=city,
+        date_str=date_str,
+        date=parsed_date,
+        category=category,
+        url=url,
+        source="alentoor",
+        description=description,
+    )
+
+
+def _extract_city_from_url(url: str) -> str:
+    """Extrait le nom de la ville depuis une URL alentoor.fr."""
+    # Pattern: https://www.alentoor.fr/lons-le-saunier/agenda/...
+    match = re.search(r'alentoor\.fr/([^/]+)/agenda', url)
+    if match:
+        slug = match.group(1)
+        # Convertir le slug en nom propre
+        city = slug.replace("-", " ").title()
+        # Corrections spécifiques
+        replacements = {
+            "Lons Le Saunier": "Lons-le-Saunier",
+            "Bourg En Bresse": "Bourg-en-Bresse",
+            "Clairvaux Les Lacs": "Clairvaux-les-Lacs",
+        }
+        return replacements.get(city, city)
+    return ""
+
+
+def _scrape_alentoor_page(url: str, source_dept: str) -> List[Event]:
+    """Scrape une page alentoor.fr et extrait les événements depuis les JSON-LD."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(f"alentoor.fr: HTTP {resp.status_code} pour {url}")
+            return []
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        events = []
+
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+                # Peut être un seul objet ou une liste
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    ev = _parse_jsonld_event(item, source_dept)
+                    if ev:
+                        events.append(ev)
+            except json.JSONDecodeError:
                 continue
 
-            # URL
-            link_el = item.find("a") or (item if item.name == "a" else None)
-            url = ""
-            if link_el and link_el.get("href"):
-                href = link_el["href"]
-                url = href if href.startswith("http") else SORTIRIEU_BASE + href
+        logger.info(f"alentoor.fr: {len(events)} événements depuis {url}")
+        return events
 
-            # Date
-            date_el = item.find(["time", "span"], class_=re.compile(r"date|time|when"))
-            date_str = date_el.get_text(strip=True) if date_el else ""
-            if not date_str and item.find("time"):
-                date_str = item.find("time").get("datetime", "")
-
-            parsed_date = None
-            if date_str:
-                try:
-                    parsed_date = dateparser.parse(date_str, fuzzy=True, dayfirst=True).date()
-                except Exception:
-                    pass
-
-            # Lieu
-            venue_el = item.find(class_=re.compile(r"venue|lieu|place|salle"))
-            venue = venue_el.get_text(strip=True) if venue_el else city
-
-            category = detect_category(title)
-
-            events.append(Event(
-                title=title,
-                venue=venue or city,
-                city=city,
-                date_str=date_str,
-                date=parsed_date,
-                category=category,
-                url=url,
-                source="sortirieu",
-            ))
-        except Exception as e:
-            logger.debug(f"Erreur parsing item sortir.eu: {e}")
-            continue
-
-    return events
+    except Exception as e:
+        logger.error(f"Erreur scraping {url}: {e}")
+        return []
 
 
-def scrape_sortirieu() -> List[Event]:
-    """Scrape sortir.eu pour toutes les villes configurées."""
+def scrape_alentoor() -> List[Event]:
+    """
+    Scrape alentoor.fr par ville (JSON-LD).
+    Utilise les slugs de ville configurés dans config.ALENTOOR_CITY_SLUGS
+    pour ne récupérer que les événements dans le rayon ≤1h de Morez.
+    """
     events = []
 
-    for city, slug in config.SORTIRIEU_SLUGS.items():
-        url = f"{SORTIRIEU_BASE}/{slug}/agenda/"
-        logger.info(f"Scraping sortir.eu: {url}")
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
-            if resp.status_code != 200:
-                logger.warning(f"sortir.eu {city}: HTTP {resp.status_code}")
-                continue
-            page_events = _parse_sortirieu_page(resp.text, city, url)
-            logger.info(f"sortir.eu {city}: {len(page_events)} événements trouvés")
+    for city_name, city_slug in config.ALENTOOR_CITY_SLUGS.items():
+        # Page principale de la ville (tous types)
+        url_main = f"{ALENTOOR_BASE}/{city_slug}/agenda"
+        page_events = _scrape_alentoor_page(url_main, city_slug)
+        # Forcer le nom de ville propre
+        for ev in page_events:
+            if not ev.city or ev.city.lower() == city_slug:
+                ev.city = city_name
+        events.extend(page_events)
+        time.sleep(0.8)
+
+        # Pages par catégorie pour plus de résultats
+        for cat_slug in ALENTOOR_CATS:
+            url = f"{ALENTOOR_BASE}/{city_slug}/agenda/{cat_slug}"
+            page_events = _scrape_alentoor_page(url, city_slug)
+            for ev in page_events:
+                if not ev.city or ev.city.lower() == city_slug:
+                    ev.city = city_name
             events.extend(page_events)
-            time.sleep(1)  # Politesse envers le serveur
-        except Exception as e:
-            logger.error(f"Erreur sortir.eu {city}: {e}")
+            time.sleep(0.5)
 
     return events
 
@@ -283,7 +316,7 @@ def collect_events(week_start: date, week_end: date) -> List[Event]:
 
     all_events: List[Event] = []
 
-    # Source 1 : Brave Search
+    # Source 1 : Brave Search (si clé disponible)
     try:
         brave_events = search_brave(week_start, week_end)
         logger.info(f"Brave: {len(brave_events)} événements bruts")
@@ -291,16 +324,15 @@ def collect_events(week_start: date, week_end: date) -> List[Event]:
     except Exception as e:
         logger.error(f"Erreur source Brave: {e}")
 
-    # Source 2 : sortir.eu
+    # Source 2 : alentoor.fr (JSON-LD, pas de clé requise)
     try:
-        sortir_events = scrape_sortirieu()
-        logger.info(f"sortir.eu: {len(sortir_events)} événements bruts")
-        all_events.extend(sortir_events)
+        alentoor_events = scrape_alentoor()
+        logger.info(f"alentoor.fr: {len(alentoor_events)} événements bruts")
+        all_events.extend(alentoor_events)
     except Exception as e:
-        logger.error(f"Erreur source sortir.eu: {e}")
+        logger.error(f"Erreur source alentoor.fr: {e}")
 
-    # Filtrage sur la semaine (événements avec date connue dans la plage)
-    # Garder aussi les événements sans date (date=None) pour ne rien rater
+    # Filtrage sur la semaine
     filtered = []
     for ev in all_events:
         if ev.date is None or (week_start <= ev.date <= week_end):

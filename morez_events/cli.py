@@ -22,6 +22,7 @@ from .report import (
     cache_is_fresh,
 )
 from .emailer import send_report
+from .calendar_sync import push_events_to_calendar
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ def run(
     week_start, week_end = current_week_bounds()
 
     if monday:
-        rprint("[bold]📅 Mode LUNDI — génération rapport semaine[/bold]")
+        rprint("[bold]📅 Mode LUNDI — génération rapport + sync Calendar[/bold]")
         rprint(f"Semaine du {week_start.strftime('%-d %B')} au {week_end.strftime('%-d %B %Y')}")
 
         events = collect_events(week_start, week_end)
@@ -196,8 +197,16 @@ def run(
         rprint(f"\n[green]✅ Rapport généré : {report_path}[/green]")
         rprint(f"   {len(events)} événements recensés")
 
+        # Sync Google Calendar (création initiale)
+        rprint("\n[blue]📅 Sync Google Calendar...[/blue]")
+        created, errors = push_events_to_calendar(
+            events, week_start, week_end, update_mode=False
+        )
+        rprint(f"   [green]{created} événements ajoutés au Calendar[/green]"
+               + (f" | [red]{errors} erreurs[/red]" if errors else ""))
+
     elif friday:
-        rprint("[bold]🔄 Mode VENDREDI — mise à jour + envoi email[/bold]")
+        rprint("[bold]🔄 Mode VENDREDI — mise à jour + email + Calendar[/bold]")
 
         # Re-collecte pour mise à jour
         events = collect_events(week_start, week_end)
@@ -220,6 +229,14 @@ def run(
 
         rprint(f"   {len(events)} événements recensés")
 
+        # Mise à jour Google Calendar (supprime + recrée)
+        rprint("\n[blue]📅 Mise à jour Google Calendar...[/blue]")
+        created, errors = push_events_to_calendar(
+            events, week_start, week_end, update_mode=True
+        )
+        rprint(f"   [green]{created} événements mis à jour dans le Calendar[/green]"
+               + (f" | [red]{errors} erreurs[/red]" if errors else ""))
+
         # Envoi email
         success = send_report(report_path, week_start, week_end)
         if success:
@@ -227,6 +244,45 @@ def run(
         else:
             rprint(f"\n[red]❌ Échec envoi email[/red]")
             raise typer.Exit(1)
+
+
+@app.command(name="sync-calendar")
+def sync_calendar(
+    update: bool = typer.Option(False, "--update", "-u", help="Supprime et recrée (mise à jour)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Simule sans créer"),
+):
+    """
+    📅 Synchronise les événements vers Google Calendar (jura39bot@gmail.com).
+
+    Par défaut, ajoute les nouveaux événements sans toucher aux existants.
+    Avec --update, supprime les anciens événements morez-events et recrée tout.
+    """
+    cache = load_cache()
+    if not cache:
+        rprint("[yellow]Aucun cache — lancez d'abord : morez-events generate[/yellow]")
+        raise typer.Exit(1)
+
+    from .scraper import Event as Ev
+    events = [Ev.from_dict(d) for d in cache.get("events", [])]
+    week_start = date.fromisoformat(cache["week_start"])
+    week_end = date.fromisoformat(cache["week_end"])
+
+    mode = "mise à jour" if update else "ajout"
+    rprint(f"[bold blue]📅 Sync Calendar ({mode}) — {len(events)} événements[/bold blue]")
+    rprint(f"   Semaine : {week_start} → {week_end}")
+    rprint(f"   Compte  : jura39bot@gmail.com")
+
+    created, errors = push_events_to_calendar(
+        events, week_start, week_end,
+        update_mode=update,
+        dry_run=dry_run,
+    )
+
+    if dry_run:
+        rprint(f"\n[dim][DRY RUN] {created} événements auraient été créés[/dim]")
+    else:
+        rprint(f"\n[green]✅ {created} événements dans Google Calendar[/green]"
+               + (f"\n[red]⚠️  {errors} erreurs[/red]" if errors else ""))
 
 
 @app.command()
