@@ -21,7 +21,7 @@ if [ -f ".env" ]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-export GOG_KEYRING_PASSWORD="${GOG_KEYRING_PASSWORD:-***REMOVED***}"
+export GOG_KEYRING_PASSWORD="${GOG_KEYRING_PASSWORD}"
 
 # Vérification clé Brave
 if [ -z "$BRAVE_API_KEY" ]; then

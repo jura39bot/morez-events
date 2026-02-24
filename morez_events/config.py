@@ -54,7 +54,7 @@ EMAIL_FROM = "jura39bot@gmail.com"
 EMAIL_TO = "chetam70@gmail.com"
 
 # ── Credentials (depuis variables d'environnement ou valeurs par défaut) ─────
-GOG_KEYRING_PASSWORD = os.getenv("GOG_KEYRING_PASSWORD", "***REMOVED***")
+GOG_KEYRING_PASSWORD = os.getenv("GOG_KEYRING_PASSWORD", "")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 
 # ── Catégories d'événements ──────────────────────────────────────────────────
