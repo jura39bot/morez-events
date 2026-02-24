@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+data/weekly_report.md
+data/events_cache.json
+data/cron.log
