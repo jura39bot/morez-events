@@ -28,12 +28,9 @@ HEADERS = {
 # ── Requêtes Brave Search ciblées CCAS/mairies ───────────────────────────────
 
 SENIOR_QUERY_TEMPLATES = [
-    # Requêtes ciblant CCAS et mairies officielles
-    "CCAS {ville} activités seniors programme agenda 2026",
-    "mairie {ville} seniors animations ateliers 2026",
-    "club seniors {ville} programme activités",
-    "gym douce atelier mémoire qi-gong {ville} 2026",
-    "{ville} CCAS seniors atelier sortie gym 2026",
+    # 2 requêtes max par ville pour rester rapide
+    "CCAS {ville} activités seniors ateliers animations 2026",
+    "club seniors {ville} programme sorties gym douce atelier",
 ]
 
 # Sites connus pour les activités seniors dans la région
@@ -48,6 +45,27 @@ NEGATIVE_KEYWORDS = [
     "recrutement", "emploi", "offre d'emploi", "appel d'offre",
     "marché public", "budget", "délibération", "conseil municipal",
     "immobilier", "vente", "location",
+]
+
+# Titres génériques à rejeter (fragments admin, pas des activités)
+GENERIC_TITLE_FRAGMENTS = [
+    "adresse administrative", "votre recherche", "établissements gérés",
+    "contacter par email", "activité :", "adresse :", "téléphone :",
+    "fax :", "courriel :", "pour en savoir", "retour sur",
+    "top of page", "rechercher", "services d'aide", "participation :",
+    "renseignement et inscription", "livret d'accueil", "laissant une liberté",
+    "organisme à disposition", "proposant des animations",
+]
+
+# Mots-clés d'activité réelle (le titre doit en contenir au moins un)
+ACTIVITY_TITLE_KEYWORDS = [
+    "atelier", "gym", "yoga", "qi-gong", "qi gong", "qigong", "taï chi",
+    "tai chi", "marche", "sophrologie", "relaxation", "mémoire", "memoire",
+    "couture", "peinture", "dessin", "informatique", "numérique", "photo",
+    "bridge", "scrabble", "jeux", "sortie", "excursion", "randonnée",
+    "natation", "aqua", "fitness", "danse", "théâtre", "chorale", "musique",
+    "club senior", "club aîné", "animations senior", "activité senior",
+    "ccas", "clic", "résidence", "association senior", "bien-être",
 ]
 
 
@@ -175,18 +193,39 @@ def _extract_events_from_soup(
             continue
         seen_titles.add(title)
 
+        title_lower = title.lower()
+
         # Exclure les fils d'Ariane (breadcrumbs) : contiennent "/"
         if title.count("/") >= 2 or title.startswith("Accueil"):
             continue
 
-        # Exclure les titres trop génériques
-        if title.lower() in {"action sociale – ccas", "ccas", "social", "seniors", "mairie"}:
+        # Exclure titres trop courts ou trop génériques
+        if len(title) < 8:
+            continue
+        if title_lower in {"action sociale – ccas", "ccas", "social", "seniors", "mairie",
+                           "activité", "adresse", "téléphone"}:
             continue
 
-        if any(kw in title.lower() for kw in NEGATIVE_KEYWORDS):
+        # Exclure fragments admin génériques
+        if any(frag in title_lower for frag in GENERIC_TITLE_FRAGMENTS):
+            continue
+
+        # Exclure mots-clés négatifs
+        if any(kw in title_lower for kw in NEGATIVE_KEYWORDS):
+            continue
+
+        # Le titre doit contenir au moins un mot-clé d'activité réelle
+        if not any(kw in title_lower for kw in ACTIVITY_TITLE_KEYWORDS):
             continue
 
         ev_date = _parse_date_from_text(text, week_start, week_end)
+
+        # Rejeter les dates clairement aberrantes (trop anciennes ou hors cadre)
+        if ev_date:
+            cutoff_past = date(2025, 1, 1)
+            cutoff_future = date(2027, 12, 31)
+            if ev_date < cutoff_past or ev_date > cutoff_future:
+                ev_date = None  # Traiter comme récurrent plutôt que rejeter
 
         link_el = el.find("a", href=True)
         ev_url = url
@@ -285,49 +324,116 @@ def _scrape_ccas_page(url: str, city: str, week_start: date, week_end: date) -> 
     return events
 
 
+def _url_is_city_relevant(url: str, title: str, city: str) -> bool:
+    """
+    Vérifie qu'une URL/titre est bien liée à la ville cible,
+    pas à une autre ville française.
+    """
+    # Normaliser le nom de ville pour comparaison dans les URLs
+    city_slug = (
+        city.lower()
+        .replace("'", "-").replace(" ", "-")
+        .replace("é", "e").replace("è", "e").replace("ê", "e")
+        .replace("à", "a").replace("â", "a")
+        .replace("ô", "o").replace("î", "i").replace("ù", "u")
+        .replace("ç", "c")
+    )
+    city_lower = city.lower()
+
+    url_lower = url.lower()
+    title_lower = title.lower()
+
+    # Villes françaises connues à exclure explicitement (sinon Brave dévie dessus)
+    EXCLUDE_CITIES = [
+        "toulouse", "paris", "lyon", "bordeaux", "marseille", "nantes",
+        "strasbourg", "rennes", "grenoble", "montpellier", "nice",
+        "mourenx", "mougins", "lalondelesmaures", "la-londe", "lorient",
+        "brest", "metz", "dijon", "reims", "le-mans", "caen",
+        "amiens", "limoges", "perpignan", "besancon", "besançon",
+        "montbeliard", "mulhouse", "annecy", "chambery",
+    ]
+
+    for excl in EXCLUDE_CITIES:
+        if excl in url_lower:
+            return False
+
+    # L'URL ou le titre doit contenir le nom de la ville (ou son slug)
+    if city_lower in url_lower or city_slug in url_lower:
+        return True
+    if city_lower in title_lower:
+        return True
+
+    # Domaines trusted pour cette ville spécifique
+    for domain in TRUSTED_SENIOR_DOMAINS:
+        if domain in url_lower and city_slug in domain:
+            return True
+
+    return False
+
+
 def search_senior_brave(city: str, week_start: date, week_end: date) -> List[Event]:
     """
-    Effectue des recherches Brave Search ciblées pour les activités seniors
-    d'une ville donnée, visant les sites CCAS et mairies.
+    Recherches Brave Search ciblées pour les activités seniors.
+    Utilise uniquement les snippets Brave (pas de scraping de pages CCAS)
+    pour rester rapide (~2 requêtes × 0.4s par ville).
     """
     events = []
-    month_year = week_start.strftime("%B %Y")
-    scraped_urls = set()
+    seen_urls: set = set()
 
     for tmpl in SENIOR_QUERY_TEMPLATES:
-        query = tmpl.format(ville=city, mois_annee=month_year)
+        query = tmpl.format(ville=city)
         logger.info(f"Senior Brave [{city}]: {query}")
-
         results = _brave_query(query, count=8)
         time.sleep(0.4)
 
         for r in results:
             url = r.get("url", "")
-            title = r.get("title", "")
-            description = r.get("description", "")
+            title = r.get("title", "").strip()
+            description = r.get("description", "").strip()
             combined = f"{title} {description}"
 
-            # Vérifier pertinence senior
-            if not _is_senior_relevant(combined):
-                # Inclure quand même si domaine trusted (CCAS officiel)
-                domain_ok = any(d in url for d in TRUSTED_SENIOR_DOMAINS)
-                if not domain_ok:
-                    continue
+            if not title or url in seen_urls:
+                continue
+            seen_urls.add(url)
 
-            # Scraper la page si pas encore vue
-            if url and url not in scraped_urls:
-                scraped_urls.add(url)
-                page_events = _scrape_ccas_page(url, city, week_start, week_end)
-                if page_events:
-                    events.extend(page_events)
-                    time.sleep(0.6)
-                else:
-                    # Fallback : créer un event depuis le résultat Brave directement
-                    ev = _parse_brave_result(r, city)
-                    if ev and _is_senior_relevant(combined):
-                        ev.category = "senior"
-                        ev.source = "brave-senior"
-                        events.append(ev)
+            # L'URL ou le titre doit concerner la ville cible
+            if not _url_is_city_relevant(url, title, city):
+                continue
+
+            # Doit être pertinent seniors
+            if not _is_senior_relevant(combined):
+                continue
+
+            # Filtres qualité sur le titre
+            title_lower = title.lower()
+            if title.count("/") >= 2:
+                continue
+            if len(title) < 8:
+                continue
+            if any(frag in title_lower for frag in GENERIC_TITLE_FRAGMENTS):
+                continue
+            if not any(kw in title_lower for kw in ACTIVITY_TITLE_KEYWORDS):
+                continue
+
+            # Tenter d'extraire une date du snippet
+            ev_date = _parse_date_from_text(combined, week_start, week_end)
+            if ev_date:
+                cutoff_past = date(2025, 1, 1)
+                cutoff_future = date(2027, 12, 31)
+                if ev_date < cutoff_past or ev_date > cutoff_future:
+                    ev_date = None
+
+            events.append(Event(
+                title=title[:80],
+                venue=city,
+                city=city,
+                date_str=ev_date.isoformat() if ev_date else "récurrent",
+                date=ev_date,
+                category="senior",
+                url=url,
+                source="brave-senior",
+                description=description[:200],
+            ))
 
     return events
 
