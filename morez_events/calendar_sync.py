@@ -13,6 +13,8 @@ from .scraper import Event
 logger = logging.getLogger(__name__)
 
 CALENDAR_ID = "jura39bot@gmail.com"
+# Agenda dédié aux activités seniors
+SENIOR_CALENDAR_ID = "29b81e92f0654272030cf9c64a347b20f219e58c7347b1e36a2ab0445b19a0ae@group.calendar.google.com"
 # Tag pour retrouver les événements créés par morez-events (évite les doublons)
 MOREZ_TAG = "[morez-events]"
 
@@ -22,6 +24,13 @@ def _gog_env() -> dict:
     env = os.environ.copy()
     env["GOG_KEYRING_PASSWORD"] = config.GOG_KEYRING_PASSWORD
     return env
+
+
+def _calendar_for_event(ev: "Event") -> str:
+    """Retourne l'ID du calendrier cible selon la catégorie de l'événement."""
+    if ev.category == "senior":
+        return SENIOR_CALENDAR_ID
+    return CALENDAR_ID
 
 
 def _run_gog(args: list, dry_run: bool = False) -> Optional[str]:
@@ -79,14 +88,12 @@ def _event_key(ev: Event) -> str:
     return f"{title}|{d}|{city}"
 
 
-def _delete_morez_events(week_start: date, week_end: date) -> int:
+def _delete_morez_events(week_start: date, week_end: date, calendar_id: str = CALENDAR_ID) -> int:
     """Supprime les événements morez-events existants pour la semaine (pour mise à jour)."""
     deleted = 0
     try:
-        from_str = f"{week_start.isoformat()}T00:00:00+01:00"
-        to_str = f"{week_end.isoformat()}T23:59:59+01:00"
         cmd = [
-            "gog", "calendar", "events", CALENDAR_ID,
+            "gog", "calendar", "events", calendar_id,
             "--account", CALENDAR_ID,
             "--from", week_start.isoformat(),
             "--to", week_end.isoformat(),
@@ -107,7 +114,7 @@ def _delete_morez_events(week_start: date, week_end: date) -> int:
                 event_id = ev.get("id", "")
                 if event_id:
                     del_cmd = [
-                        "gog", "calendar", "delete", CALENDAR_ID, event_id,
+                        "gog", "calendar", "delete", calendar_id, event_id,
                         "--account", CALENDAR_ID, "--force",
                     ]
                     try:
@@ -119,8 +126,8 @@ def _delete_morez_events(week_start: date, week_end: date) -> int:
                     except Exception as e:
                         logger.debug(f"Erreur suppression {event_id}: {e}")
     except Exception as e:
-        logger.warning(f"Erreur suppression events: {e}")
-    logger.info(f"Calendar: {deleted} événements supprimés pour mise à jour")
+        logger.warning(f"Erreur suppression events ({calendar_id[:30]}…): {e}")
+    logger.info(f"Calendar {calendar_id[:30]}…: {deleted} événements supprimés")
     return deleted
 
 
@@ -151,9 +158,10 @@ def push_events_to_calendar(
         logger.warning("Aucun événement avec date valide à pousser vers Calendar")
         return 0, 0
 
-    # En mode update, supprimer les anciens d'abord
+    # En mode update, supprimer les anciens d'abord (dans les deux agendas)
     if update_mode and not dry_run:
-        _delete_morez_events(week_start, week_end)
+        _delete_morez_events(week_start, week_end, CALENDAR_ID)
+        _delete_morez_events(week_start, week_end, SENIOR_CALENDAR_ID)
 
     created = 0
     errors = 0
@@ -183,8 +191,9 @@ def push_events_to_calendar(
             }.get(ev.category, "📅")
             summary = f"{cat_emoji} {ev.title} — {ev.city}"[:100]
 
+            target_cal = _calendar_for_event(ev)
             cmd = [
-                "gog", "calendar", "create", CALENDAR_ID,
+                "gog", "calendar", "create", target_cal,
                 "--account", CALENDAR_ID,
                 "--summary", summary,
                 "--from", start_str,
@@ -194,7 +203,7 @@ def push_events_to_calendar(
             ]
 
             if dry_run:
-                logger.info(f"[DRY RUN] Créerait: {summary} le {ev.date}")
+                logger.info(f"[DRY RUN] Créerait [{target_cal[:20]}…]: {summary} le {ev.date}")
                 created += 1
                 continue
 
