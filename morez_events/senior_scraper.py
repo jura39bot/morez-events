@@ -1,9 +1,12 @@
-"""Scraping des activités seniors pour les villes cibles."""
+"""
+Scraping des activités seniors depuis les sites CCAS/mairies des villes cibles.
+Utilise Brave Search pour cibler les pages officielles, puis extrait les données.
+"""
 
 import logging
 import re
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 import requests
@@ -11,7 +14,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
 
 from . import config
-from .scraper import Event, detect_category
+from .scraper import Event, detect_category, _brave_query, _parse_brave_result
 
 logger = logging.getLogger(__name__)
 
@@ -22,232 +25,337 @@ HEADERS = {
     )
 }
 
-BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
+# ── Requêtes Brave Search ciblées CCAS/mairies ───────────────────────────────
 
-
-# ── Brave Search — requêtes spécifiques seniors ──────────────────────────────
-
-SENIOR_QUERIES = [
-    "activités seniors {ville} {mois_annee}",
-    "gym douce yoga seniors {ville} {mois_annee}",
-    "club seniors CCAS {ville} agenda {mois_annee}",
-    "atelier mémoire qi-gong retraités {ville} {mois_annee}",
-    "animations seniors {ville} {annee}",
+SENIOR_QUERY_TEMPLATES = [
+    # Requêtes ciblant CCAS et mairies officielles
+    "CCAS {ville} activités seniors programme agenda 2026",
+    "mairie {ville} seniors animations ateliers 2026",
+    "club seniors {ville} programme activités",
+    "gym douce atelier mémoire qi-gong {ville} 2026",
+    "{ville} CCAS seniors atelier sortie gym 2026",
 ]
 
-# URLs CCAS et mairies connues pour les villes senior ciblées
-CCAS_URLS = {
-    "Morez":       "https://www.morez.fr/",
-    "Saint-Claude": "https://www.ville-saint-claude.fr/",
-    "Champagnole": "https://www.champagnole.fr/mairie-et-services/social/ateliers-collectifs-seniors-20212022/",
-    "Morbier":     "https://www.morbier.fr/",
-    "Les Rousses": "https://www.lesrousses.com/",
-    "Prémanon":    "https://www.premanon.fr/",
-    "Bois-d'Amont": "https://www.boisd-amont.fr/",
-}
+# Sites connus pour les activités seniors dans la région
+TRUSTED_SENIOR_DOMAINS = [
+    "morez.fr", "morbier.fr", "les-rousses.com", "premanon.fr",
+    "boisd-amont.com", "saint-claude.fr", "champagnole.fr",
+    "boisdamont.fr", "leroussesvillagejurassien.fr",
+]
+
+# Mots-clés négatifs (à exclure si dans le titre)
+NEGATIVE_KEYWORDS = [
+    "recrutement", "emploi", "offre d'emploi", "appel d'offre",
+    "marché public", "budget", "délibération", "conseil municipal",
+    "immobilier", "vente", "location",
+]
 
 
-def _brave_query(query: str, count: int = 5) -> List[dict]:
-    """Effectue une recherche Brave et retourne les résultats bruts."""
-    if not config.BRAVE_API_KEY:
-        return []
-    headers = {
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip",
-        "X-Subscription-Token": config.BRAVE_API_KEY,
+def _is_senior_relevant(text: str) -> bool:
+    """Vérifie si un texte est pertinent pour les activités seniors."""
+    text_lower = text.lower()
+    # Doit contenir au moins un mot-clé senior
+    has_senior_kw = any(kw in text_lower for kw in config.CATEGORY_KEYWORDS["senior"])
+    # Ne doit pas contenir de mots-clés négatifs
+    has_negative = any(kw in text_lower for kw in NEGATIVE_KEYWORDS)
+    return has_senior_kw and not has_negative
+
+
+def _parse_date_from_text(text: str, week_start: date, week_end: date) -> Optional[date]:
+    """
+    Tente d'extraire une date du texte.
+    Si aucune date trouvée, retourne None (l'événement sera inclus quand même
+    car les activités seniors sont souvent hebdomadaires sans date précise).
+    """
+    # Patterns dates françaises
+    patterns = [
+        r'\b(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})\b',        # 25/02/2026
+        r'\b(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|'
+        r'juillet|août|septembre|octobre|novembre|décembre)\s+(\d{4})\b',  # 25 février 2026
+        r'\b(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+'
+        r'(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|'
+        r'juillet|août|septembre|octobre|novembre|décembre)\b',   # lundi 25 février
+    ]
+
+    mois_fr = {
+        "janvier": 1, "février": 2, "mars": 3, "avril": 4,
+        "mai": 5, "juin": 6, "juillet": 7, "août": 8,
+        "septembre": 9, "octobre": 10, "novembre": 11, "décembre": 12,
     }
-    params = {"q": query, "count": count, "country": "fr", "search_lang": "fr"}
-    try:
-        resp = requests.get(BRAVE_API_URL, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json().get("web", {}).get("results", [])
-    except Exception as e:
-        logger.error(f"Brave senior ({query!r}): {e}")
-        return []
 
+    text_lower = text.lower()
 
-def _parse_brave_senior(result: dict, city: str) -> Optional[Event]:
-    """Convertit un résultat Brave en Event senior."""
-    title = result.get("title", "").strip()
-    url = result.get("url", "")
-    description = result.get("description", "")
-    if not title or not url:
-        return None
-
-    # Essayer de parser une date
-    parsed_date = None
-    date_str = ""
-    for fragment in [description, title]:
+    # Pattern numérique
+    m = re.search(r'\b(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})\b', text_lower)
+    if m:
         try:
-            parsed_date = dateparser.parse(fragment, fuzzy=True, dayfirst=True).date()
-            date_str = str(parsed_date)
-            break
-        except Exception:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
             pass
 
-    return Event(
-        title=title,
-        venue=city,
-        city=city,
-        date_str=date_str,
-        date=parsed_date,
-        category="senior",
-        url=url,
-        source="brave-senior",
-        description=description[:200],
+    # Pattern "25 février 2026"
+    m = re.search(
+        r'\b(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|'
+        r'juillet|août|septembre|octobre|novembre|décembre)\s+(\d{4})\b',
+        text_lower
     )
+    if m:
+        try:
+            mois = mois_fr[m.group(2)]
+            return date(int(m.group(3)), mois, int(m.group(1)))
+        except (ValueError, KeyError):
+            pass
+
+    # Pattern "lundi 25 février"
+    m = re.search(
+        r'\b(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+'
+        r'(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|'
+        r'juillet|août|septembre|octobre|novembre|décembre)\b',
+        text_lower
+    )
+    if m:
+        try:
+            mois = mois_fr[m.group(2)]
+            year = week_start.year
+            return date(year, mois, int(m.group(1)))
+        except (ValueError, KeyError):
+            pass
+
+    # Fallback dateutil
+    try:
+        parsed = dateparser.parse(text[:200], fuzzy=True, dayfirst=True)
+        if parsed:
+            d = parsed.date()
+            # Accepter seulement si dans une plage raisonnable (±3 mois)
+            if week_start - timedelta(days=90) <= d <= week_end + timedelta(days=90):
+                return d
+    except Exception:
+        pass
+
+    return None
 
 
-def search_brave_senior(week_start: date, week_end: date) -> List[Event]:
-    """Recherche d'activités seniors via Brave Search pour les villes cibles."""
+def _extract_events_from_soup(
+    soup: BeautifulSoup, url: str, city: str, week_start: date, week_end: date
+) -> List[Event]:
+    """Extrait les activités seniors depuis un BeautifulSoup parsé."""
     events = []
-    month_year = week_start.strftime("%B %Y")
-    year = str(week_start.year)
+    from urllib.parse import urlparse
 
-    for city in config.SENIOR_CITIES:
-        for tmpl in SENIOR_QUERIES:
-            query = tmpl.format(ville=city, mois_annee=month_year, annee=year)
-            logger.info(f"Brave senior: {query}")
-            results = _brave_query(query, count=5)
-            for r in results:
-                ev = _parse_brave_senior(r, city)
-                if ev:
-                    events.append(ev)
-            time.sleep(0.3)
+    # Supprimer nav/footer/aside pour ne garder que le contenu principal
+    for tag in soup.find_all(["nav", "footer", "aside", "header"]):
+        tag.decompose()
 
-    logger.info(f"Brave senior: {len(events)} événements bruts")
+    candidates = []
+
+    # Stratégie 1 : éléments <article> ou <li> ou <div> avec contenu senior
+    for el in soup.find_all(["article", "li", "div"], limit=200):
+        text = el.get_text(separator=" ", strip=True)
+        if len(text) < 30 or len(text) > 2000:
+            continue
+        if _is_senior_relevant(text):
+            candidates.append((el, text))
+
+    # Stratégie 2 : fallback sur paragraphes contenant des mots-clés
+    if not candidates:
+        for el in soup.find_all(["p", "h2", "h3", "h4"], limit=300):
+            text = el.get_text(separator=" ", strip=True)
+            if _is_senior_relevant(text):
+                candidates.append((el, text))
+
+    seen_titles = set()
+    for el, text in candidates[:20]:
+        title_el = el.find(["h1", "h2", "h3", "h4", "strong", "b"])
+        if title_el:
+            title = title_el.get_text(strip=True)[:80]
+        else:
+            title = text[:60].split(".")[0].strip()
+
+        if not title or title in seen_titles:
+            continue
+        seen_titles.add(title)
+
+        # Exclure les fils d'Ariane (breadcrumbs) : contiennent "/"
+        if title.count("/") >= 2 or title.startswith("Accueil"):
+            continue
+
+        # Exclure les titres trop génériques
+        if title.lower() in {"action sociale – ccas", "ccas", "social", "seniors", "mairie"}:
+            continue
+
+        if any(kw in title.lower() for kw in NEGATIVE_KEYWORDS):
+            continue
+
+        ev_date = _parse_date_from_text(text, week_start, week_end)
+
+        link_el = el.find("a", href=True)
+        ev_url = url
+        if link_el:
+            href = link_el["href"]
+            if href.startswith("http"):
+                ev_url = href
+            elif href.startswith("/"):
+                parsed_url = urlparse(url)
+                ev_url = f"{parsed_url.scheme}://{parsed_url.netloc}{href}"
+
+        events.append(Event(
+            title=title,
+            venue=city,
+            city=city,
+            date_str=ev_date.isoformat() if ev_date else "récurrent",
+            date=ev_date,
+            category="senior",
+            url=ev_url,
+            source="ccas",
+            description=text[:200],
+        ))
+
     return events
 
 
-# ── Scraping CCAS et mairies ─────────────────────────────────────────────────
+def _scrape_ccas_page(url: str, city: str, week_start: date, week_end: date) -> List[Event]:
+    """
+    Scrape une page CCAS/mairie pour extraire les activités seniors.
+    Suit également les liens internes vers des sous-pages senior (1 niveau).
+    """
+    from urllib.parse import urlparse
 
-def _parse_senior_page(html: str, city: str, url: str) -> List[Event]:
-    """Extrait les activités seniors depuis une page mairie/CCAS."""
     events = []
-    soup = BeautifulSoup(html, "lxml")
+    visited = {url}
 
-    # Mots-clés senior dans le texte
-    senior_keywords = [
-        "senior", "retraité", "âge d'or", "gym douce", "qi-gong", "qigong",
-        "atelier mémoire", "sophrologie", "tai chi", "yoga", "marche nordique",
-        "animation senior", "club senior", "ccas",
-    ]
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
+            logger.debug(f"CCAS {city}: HTTP {resp.status_code} → {url}")
+            return []
 
-    # Chercher les blocs/sections qui parlent de seniors
-    for tag in soup.find_all(["article", "div", "li", "section", "p"], limit=200):
-        text = tag.get_text(" ", strip=True).lower()
-        if not any(kw in text for kw in senior_keywords):
-            continue
-        if len(text) < 20 or len(text) > 1000:
-            continue
+        soup = BeautifulSoup(resp.text, "lxml")
 
-        # Extraire le titre
-        title_el = tag.find(["h1", "h2", "h3", "h4", "strong", "b"])
-        title = title_el.get_text(strip=True) if title_el else tag.get_text(strip=True)[:80]
-        title = re.sub(r'\s+', ' ', title).strip()
-        if not title or len(title) < 5:
-            continue
+        # Extraire les events de la page principale
+        page_events = _extract_events_from_soup(soup, url, city, week_start, week_end)
+        events.extend(page_events)
 
-        # Date
-        parsed_date = None
-        date_str = ""
-        time_el = tag.find("time")
-        if time_el:
-            date_str = time_el.get("datetime", "") or time_el.get_text(strip=True)
+        # Chercher les liens internes vers des sous-pages senior (1 niveau)
+        parsed = urlparse(url)
+        base_domain = f"{parsed.scheme}://{parsed.netloc}"
+        senior_links = []
+
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            link_text = a.get_text(strip=True).lower()
+
+            # Liens internes uniquement
+            if href.startswith("/"):
+                full_url = base_domain + href
+            elif href.startswith(base_domain):
+                full_url = href
+            else:
+                continue
+
+            if full_url in visited:
+                continue
+
+            # Le lien doit pointer vers quelque chose de senior
+            combined = href.lower() + " " + link_text
+            if any(kw in combined for kw in [
+                "senior", "aîné", "retraite", "bien-etre", "bien_etre",
+                "social", "ccas", "atelier", "animation", "activite", "gym"
+            ]):
+                senior_links.append(full_url)
+
+        # Scraper jusqu'à 4 sous-pages senior
+        for sub_url in senior_links[:4]:
+            visited.add(sub_url)
             try:
-                parsed_date = dateparser.parse(date_str, fuzzy=True, dayfirst=True).date()
+                sub_resp = requests.get(sub_url, headers=HEADERS, timeout=12)
+                if sub_resp.status_code == 200:
+                    sub_soup = BeautifulSoup(sub_resp.text, "lxml")
+                    sub_events = _extract_events_from_soup(sub_soup, sub_url, city, week_start, week_end)
+                    events.extend(sub_events)
+                    time.sleep(0.4)
             except Exception:
                 pass
 
-        # Lien
-        link_el = tag.find("a")
-        ev_url = url
-        if link_el and link_el.get("href"):
-            href = link_el["href"]
-            ev_url = href if href.startswith("http") else url.rstrip("/") + "/" + href.lstrip("/")
+        if events:
+            logger.info(f"CCAS {city}: {len(events)} activités trouvées depuis {url}")
 
-        events.append(Event(
-            title=title[:80],
-            venue=city,
-            city=city,
-            date_str=date_str,
-            date=parsed_date,
-            category="senior",
-            url=ev_url,
-            source="mairie",
-            description=tag.get_text(" ", strip=True)[:200],
-        ))
-
-    # Dédupliquer par titre
-    seen = set()
-    unique = []
-    for ev in events:
-        key = ev.title.lower().strip()
-        if key not in seen:
-            seen.add(key)
-            unique.append(ev)
-
-    return unique
-
-
-def scrape_ccas_mairies() -> List[Event]:
-    """Scrape les pages CCAS/mairies des villes senior cibles."""
-    events = []
-
-    for city, url in CCAS_URLS.items():
-        logger.info(f"Scraping mairie/CCAS: {city} — {url}")
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=12)
-            if resp.status_code != 200:
-                logger.warning(f"  HTTP {resp.status_code} pour {url}")
-                continue
-            page_events = _parse_senior_page(resp.text, city, url)
-            logger.info(f"  {len(page_events)} activités senior trouvées")
-            events.extend(page_events)
-            time.sleep(1)
-        except Exception as e:
-            logger.error(f"  Erreur {city}: {e}")
+    except Exception as e:
+        logger.debug(f"CCAS {city}: erreur scraping {url}: {e}")
 
     return events
 
 
-# ── Collecte senior principale ────────────────────────────────────────────────
+def search_senior_brave(city: str, week_start: date, week_end: date) -> List[Event]:
+    """
+    Effectue des recherches Brave Search ciblées pour les activités seniors
+    d'une ville donnée, visant les sites CCAS et mairies.
+    """
+    events = []
+    month_year = week_start.strftime("%B %Y")
+    scraped_urls = set()
+
+    for tmpl in SENIOR_QUERY_TEMPLATES:
+        query = tmpl.format(ville=city, mois_annee=month_year)
+        logger.info(f"Senior Brave [{city}]: {query}")
+
+        results = _brave_query(query, count=8)
+        time.sleep(0.4)
+
+        for r in results:
+            url = r.get("url", "")
+            title = r.get("title", "")
+            description = r.get("description", "")
+            combined = f"{title} {description}"
+
+            # Vérifier pertinence senior
+            if not _is_senior_relevant(combined):
+                # Inclure quand même si domaine trusted (CCAS officiel)
+                domain_ok = any(d in url for d in TRUSTED_SENIOR_DOMAINS)
+                if not domain_ok:
+                    continue
+
+            # Scraper la page si pas encore vue
+            if url and url not in scraped_urls:
+                scraped_urls.add(url)
+                page_events = _scrape_ccas_page(url, city, week_start, week_end)
+                if page_events:
+                    events.extend(page_events)
+                    time.sleep(0.6)
+                else:
+                    # Fallback : créer un event depuis le résultat Brave directement
+                    ev = _parse_brave_result(r, city)
+                    if ev and _is_senior_relevant(combined):
+                        ev.category = "senior"
+                        ev.source = "brave-senior"
+                        events.append(ev)
+
+    return events
+
 
 def collect_senior_events(week_start: date, week_end: date) -> List[Event]:
     """
-    Collecte toutes les activités seniors :
-    - Brave Search ciblé senior (villes cibles)
-    - Scraping CCAS/mairies
-    Retourne les events avec category='senior', filtrés sur la semaine.
+    Collecte les activités seniors pour toutes les villes cibles.
+    Point d'entrée appelé depuis scraper.collect_events().
     """
-    all_events = []
+    all_senior: List[Event] = []
 
-    # Source 1 : Brave Search senior
-    try:
-        all_events.extend(search_brave_senior(week_start, week_end))
-    except Exception as e:
-        logger.error(f"Erreur Brave senior: {e}")
+    logger.info(f"Senior: collecte pour {len(config.SENIOR_CITIES)} villes cibles")
 
-    # Source 2 : CCAS/mairies
-    try:
-        all_events.extend(scrape_ccas_mairies())
-    except Exception as e:
-        logger.error(f"Erreur CCAS: {e}")
+    for city in config.SENIOR_CITIES:
+        logger.info(f"Senior: traitement de {city}")
+        city_events = search_senior_brave(city, week_start, week_end)
+        logger.info(f"Senior [{city}]: {len(city_events)} activités")
+        all_senior.extend(city_events)
+        time.sleep(1.0)  # Politesse entre villes
 
-    # Filtre sur semaine (garder aussi sans date)
-    filtered = [
-        ev for ev in all_events
-        if ev.date is None or (week_start <= ev.date <= week_end)
-    ]
+    # Filtrer les events dans la semaine (ou sans date = récurrents inclus)
+    filtered = []
+    for ev in all_senior:
+        if ev.date is None:
+            # Activité récurrente sans date précise → inclure si contenu pertinent
+            filtered.append(ev)
+        elif week_start <= ev.date <= week_end:
+            filtered.append(ev)
 
-    # Dédoublonnage
-    seen = set()
-    unique = []
-    for ev in filtered:
-        key = (re.sub(r'\s+', ' ', ev.title.lower().strip()), ev.city.lower())
-        if key not in seen:
-            seen.add(key)
-            unique.append(ev)
-
-    logger.info(f"Senior: {len(unique)} activités après filtrage")
-    return unique
+    logger.info(f"Senior: {len(filtered)} activités après filtrage sur la semaine")
+    return filtered
