@@ -164,8 +164,8 @@ HEADERS = {
     )
 }
 
-# Catégories à scraper par ville
-ALENTOOR_CATS = ["concert", "festival", "spectacle", "theatre", "exposition", "sport", "festivites", "activites-loisirs"]
+# Note: on scrape uniquement la page principale /city/agenda (pas les sous-catégories)
+# → 71 requêtes au lieu de 639, generate en ~1 min au lieu de ~10 min
 
 
 def _parse_jsonld_event(data: dict, source_dept: str) -> Optional[Event]:
@@ -282,25 +282,15 @@ def scrape_alentoor() -> List[Event]:
     events = []
 
     for city_name, city_slug in config.ALENTOOR_CITY_SLUGS.items():
-        # Page principale de la ville (tous types)
+        # Page principale uniquement — contient tous les événements en JSON-LD
+        # (scraper les 8 sous-catégories multiplie par 9 le temps sans gain significatif)
         url_main = f"{ALENTOOR_BASE}/{city_slug}/agenda"
         page_events = _scrape_alentoor_page(url_main, city_slug)
-        # Forcer le nom de ville propre
         for ev in page_events:
             if not ev.city or ev.city.lower() == city_slug:
                 ev.city = city_name
         events.extend(page_events)
-        time.sleep(0.8)
-
-        # Pages par catégorie pour plus de résultats
-        for cat_slug in ALENTOOR_CATS:
-            url = f"{ALENTOOR_BASE}/{city_slug}/agenda/{cat_slug}"
-            page_events = _scrape_alentoor_page(url, city_slug)
-            for ev in page_events:
-                if not ev.city or ev.city.lower() == city_slug:
-                    ev.city = city_name
-            events.extend(page_events)
-            time.sleep(0.5)
+        time.sleep(0.5)
 
     return events
 
