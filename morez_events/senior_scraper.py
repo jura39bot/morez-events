@@ -438,6 +438,202 @@ def search_senior_brave(city: str, week_start: date, week_end: date) -> List[Eve
     return events
 
 
+
+# ── Scraping direct des agendas officiels des communes proches ────────────────
+# Ces pages sont des agendas généraux de mairies/offices du tourisme.
+# On y extrait TOUS les événements (pas seulement seniors) car ces communes
+# sont les plus proches de Morez — leurs activités sont pertinentes localement.
+
+CITY_DIRECT_URLS: dict[str, list[str]] = {
+    "Morez": [
+        "https://www.hauts-de-bienne.fr/agenda",
+        "https://www.hauts-de-bienne.fr/votre-mairie/actions-sociales",
+    ],
+    "Les Rousses": [
+        "https://www.lesrousses.com/agenda/",
+        "https://www.lesrousses.com/agenda/ateliers-creatifs-station-des-rousses/",
+    ],
+    "Prémanon": [
+        "https://premanon.com/",
+    ],
+    "Bois-d'Amont": [
+        "https://www.boisdamont.fr/",
+        "https://www.alentoor.fr/bois-d-amont/agenda",
+    ],
+    "Morbier": [
+        "http://www.morbier.fr/fr/evenements",
+    ],
+}
+
+# Mots négatifs pour éviter les faux positifs admin / navigation
+_ADMIN_NEGATIVE = [
+    "délibération", "appel d'offre", "marché public", "budget",
+    "recrutement", "offre d'emploi", "compte-rendu du conseil",
+    "inscription scolaire",
+]
+
+# Titres génériques de page d'accueil / navigation à rejeter
+_GENERIC_PAGE_FRAGMENTS = [
+    "en quelques chiffres", "bienvenue à", "bienvenue sur", "site officiel",
+    "nous sommes désolés", "certaines parties du site", "retour accueil",
+    "nos tempsforts", "temps forts", "ateliers pour tous les âges",
+    "recherche par catégorie", "recherche par mois", "agenda - février",
+    "agenda - mars", "agenda - janvier", "toutes les catégories",
+    "voir tous les événements", "découvrir nos",
+    # Navigation alentoor.fr
+    "retour rechercher univers", "je cherche ?", "quand ? aujourd'hui",
+    "aujourd'hui demain cette semaine", "semaine prochaine", "ce weekend",
+    "univers je cherche", "une bonne adresse", "un bien immob",
+    "dans le village de",
+]
+
+# Regex pour détecter un titre qui est juste une date
+_DATE_ONLY_TITLE_RE = re.compile(
+    r'^(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)?\s*'
+    r'\d{1,2}\s+(?:janvier|février|mars|avril|mai|juin|'
+    r'juillet|août|septembre|octobre|novembre|décembre)\s+\d{4}$',
+    re.IGNORECASE
+)
+
+
+def _extract_events_general(
+    soup: BeautifulSoup,
+    url: str,
+    city: str,
+    week_start: date,
+    week_end: date,
+) -> List[Event]:
+    """
+    Extrait les événements depuis une page agenda générale de mairie.
+    Plus permissif que _extract_events_from_soup (pas de filtre senior obligatoire).
+    """
+    from urllib.parse import urlparse
+
+    events: List[Event] = []
+    seen_titles: set[str] = set()
+
+    # Supprimer nav/footer/aside
+    for tag in soup.find_all(["nav", "footer", "aside", "header", "script", "style"]):
+        tag.decompose()
+
+    parsed_base = urlparse(url)
+    base_domain = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+    # Chercher des articles / éléments structurés avec titre + date
+    candidates = []
+    for el in soup.find_all(["article", "li", "div"], limit=300):
+        text = el.get_text(separator=" ", strip=True)
+        if len(text) < 20 or len(text) > 3000:
+            continue
+        # Doit contenir quelque chose ressemblant à une date ou un événement
+        if re.search(r'\b\d{1,2}[/\-\.]\d{1,2}|\b(janvier|février|mars|avril|mai|juin|'
+                     r'juillet|août|septembre|octobre|novembre|décembre)\b', text.lower()):
+            candidates.append((el, text))
+        elif el.find(["h2", "h3", "h4"]):
+            candidates.append((el, text))
+
+    for el, text in candidates[:30]:
+        # Extraire le titre
+        title_el = el.find(["h1", "h2", "h3", "h4", "strong"])
+        if title_el:
+            title = title_el.get_text(strip=True)[:80]
+        else:
+            # Fallback : première phrase significative
+            title = text[:70].split(".")[0].split("\n")[0].strip()
+
+        if not title or len(title) < 8:
+            continue
+        title_norm = title.lower().strip()
+        if title_norm in seen_titles:
+            continue
+
+        # Exclure titres admin / navigation / pages génériques
+        if any(neg in title_norm for neg in _ADMIN_NEGATIVE):
+            continue
+        if any(frag in title_norm for frag in _GENERIC_PAGE_FRAGMENTS):
+            continue
+        if title.count("/") >= 2 or title_norm.startswith("accueil"):
+            continue
+        # Rejeter si le titre ressemble à du contenu de navigation (trop court ou URL-like)
+        if len(title) < 10 or title_norm.startswith("http"):
+            continue
+        # Rejeter les titres qui sont juste une date
+        if _DATE_ONLY_TITLE_RE.match(title.strip()):
+            continue
+
+        seen_titles.add(title_norm)
+
+        # Extraire la date
+        ev_date = _parse_date_from_text(text, week_start, week_end)
+        if ev_date:
+            # Rejeter dates aberrantes
+            if ev_date < date(2025, 1, 1) or ev_date > date(2027, 12, 31):
+                ev_date = None
+
+        # Garder seulement les events dans la semaine ou sans date précise
+        if ev_date is not None and not (week_start <= ev_date <= week_end):
+            continue
+
+        # URL de l'événement
+        link_el = el.find("a", href=True)
+        ev_url = url
+        if link_el:
+            href = link_el["href"]
+            if href.startswith("http"):
+                ev_url = href
+            elif href.startswith("/"):
+                ev_url = base_domain + href
+
+        events.append(Event(
+            title=title,
+            venue=city,
+            city=city,
+            date_str=ev_date.isoformat() if ev_date else "récurrent",
+            date=ev_date,
+            category="senior",
+            url=ev_url,
+            source="mairie-directe",
+            description=text[:200],
+        ))
+
+    return events
+
+
+def scrape_direct_city_pages(week_start: date, week_end: date) -> List[Event]:
+    """
+    Scrape directement les pages agenda des 5 communes proches de Morez.
+    Retourne des événements locaux taggés 'senior' (agenda communautaire local).
+    """
+    all_events: List[Event] = []
+
+    for city, urls in CITY_DIRECT_URLS.items():
+        city_events: List[Event] = []
+
+        for url in urls:
+            logger.info(f"Scraping direct [{city}]: {url}")
+            try:
+                resp = requests.get(url, headers=HEADERS, timeout=15)
+                if resp.status_code != 200:
+                    logger.warning(f"  → HTTP {resp.status_code}")
+                    continue
+                soup = BeautifulSoup(resp.text, "lxml")
+                page_events = _extract_events_general(soup, url, city, week_start, week_end)
+                city_events.extend(page_events)
+                logger.info(f"  → {len(page_events)} events extraits")
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"  → Erreur: {e}")
+
+        if city_events:
+            logger.info(f"Scraping direct [{city}]: {len(city_events)} events au total")
+        else:
+            logger.info(f"Scraping direct [{city}]: aucun événement trouvé cette semaine")
+
+        all_events.extend(city_events)
+
+    return all_events
+
+
 def collect_senior_events(week_start: date, week_end: date) -> List[Event]:
     """
     Collecte les activités seniors pour toutes les villes cibles.
@@ -447,21 +643,38 @@ def collect_senior_events(week_start: date, week_end: date) -> List[Event]:
 
     logger.info(f"Senior: collecte pour {len(config.SENIOR_CITIES)} villes cibles")
 
+    # 1. Brave Search (existant)
     for city in config.SENIOR_CITIES:
-        logger.info(f"Senior: traitement de {city}")
+        logger.info(f"Senior Brave: traitement de {city}")
         city_events = search_senior_brave(city, week_start, week_end)
-        logger.info(f"Senior [{city}]: {len(city_events)} activités")
+        logger.info(f"Senior Brave [{city}]: {len(city_events)} activités")
         all_senior.extend(city_events)
         time.sleep(1.0)  # Politesse entre villes
 
+    # 2. Scraping direct des pages mairie des 5 communes proches (NOUVEAU)
+    logger.info("Senior: scraping direct des agendas mairie (5 communes proches)")
+    direct_events = scrape_direct_city_pages(week_start, week_end)
+    logger.info(f"Senior: {len(direct_events)} events depuis scraping direct")
+    all_senior.extend(direct_events)
+
+    # Dédupliquer par (titre normalisé + date + ville)
+    seen_keys: set[str] = set()
+    deduped: List[Event] = []
+    for ev in all_senior:
+        import re as _re
+        t = _re.sub(r'\s+', ' ', (ev.title or '').lower().strip())[:60]
+        key = f"{t}|{(ev.date or 'nodate')}|{(ev.city or '').lower()}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(ev)
+
     # Filtrer les events dans la semaine (ou sans date = récurrents inclus)
     filtered = []
-    for ev in all_senior:
+    for ev in deduped:
         if ev.date is None:
-            # Activité récurrente sans date précise → inclure si contenu pertinent
             filtered.append(ev)
         elif week_start <= ev.date <= week_end:
             filtered.append(ev)
 
-    logger.info(f"Senior: {len(filtered)} activités après filtrage sur la semaine")
+    logger.info(f"Senior: {len(filtered)} activités après dédup + filtrage semaine")
     return filtered
