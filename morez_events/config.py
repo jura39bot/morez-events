@@ -2,6 +2,10 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Charger le .env depuis la racine du projet
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ── Géographie ──────────────────────────────────────────────────────────────
 CENTER_CITY = "Morez, Jura"
@@ -105,6 +109,8 @@ EMAIL_TO = "chetam70@gmail.com"
 # ── Credentials (depuis variables d'environnement ou valeurs par défaut) ─────
 GOG_KEYRING_PASSWORD = os.getenv("GOG_KEYRING_PASSWORD", "")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
+CF_API_TOKEN = os.getenv("CF_API_TOKEN", "")
 
 # ── Catégories d'événements ──────────────────────────────────────────────────
 CATEGORIES = {

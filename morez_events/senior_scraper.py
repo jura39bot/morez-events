@@ -15,6 +15,7 @@ from dateutil import parser as dateparser
 
 from . import config
 from .scraper import Event, detect_category, _brave_query, _parse_brave_result
+from .cf_browser import fetch_page
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +264,7 @@ def _scrape_ccas_page(url: str, city: str, week_start: date, week_end: date) -> 
     visited = {url}
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = fetch_page(url, timeout=15)
         if resp.status_code != 200:
             logger.debug(f"CCAS {city}: HTTP {resp.status_code} → {url}")
             return []
@@ -306,7 +307,7 @@ def _scrape_ccas_page(url: str, city: str, week_start: date, week_end: date) -> 
         for sub_url in senior_links[:4]:
             visited.add(sub_url)
             try:
-                sub_resp = requests.get(sub_url, headers=HEADERS, timeout=12)
+                sub_resp = fetch_page(sub_url, timeout=12)
                 if sub_resp.status_code == 200:
                     sub_soup = BeautifulSoup(sub_resp.text, "lxml")
                     sub_events = _extract_events_from_soup(sub_soup, sub_url, city, week_start, week_end)
@@ -612,7 +613,7 @@ def scrape_direct_city_pages(week_start: date, week_end: date) -> List[Event]:
         for url in urls:
             logger.info(f"Scraping direct [{city}]: {url}")
             try:
-                resp = requests.get(url, headers=HEADERS, timeout=15)
+                resp = fetch_page(url, timeout=15)
                 if resp.status_code != 200:
                     logger.warning(f"  → HTTP {resp.status_code}")
                     continue

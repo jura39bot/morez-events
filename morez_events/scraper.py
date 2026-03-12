@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
 
 from . import config
+from .cf_browser import fetch_page
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,8 @@ def _extract_city_from_url(url: str) -> str:
 def _scrape_alentoor_page(url: str, source_dept: str) -> List[Event]:
     """Scrape une page alentoor.fr et extrait les événements depuis les JSON-LD."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        # alentoor.fr retourne le JSON-LD en HTML statique → requests suffit
+        resp = fetch_page(url, timeout=15, use_cf=False)
         if resp.status_code != 200:
             logger.warning(f"alentoor.fr: HTTP {resp.status_code} pour {url}")
             return []
