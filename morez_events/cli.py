@@ -23,6 +23,7 @@ from .report import (
 )
 from .emailer import send_report
 from .calendar_sync import push_events_to_calendar
+from .drive_sync import push_report_to_drive
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -237,6 +238,14 @@ def run(
         rprint(f"   [green]{created} événements mis à jour dans le Calendar[/green]"
                + (f" | [red]{errors} erreurs[/red]" if errors else ""))
 
+        # Push vers Google Drive
+        rprint("\n[blue]📄 Push vers Google Drive...[/blue]")
+        drive_success = push_report_to_drive(report_path, week_start, week_end)
+        if drive_success:
+            rprint("   [green]✅ Rapport poussé dans Google Docs[/green]")
+        else:
+            rprint("   [yellow]⚠️ Échec push Drive[/yellow]")
+        
         # Envoi email
         success = send_report(report_path, week_start, week_end)
         if success:
